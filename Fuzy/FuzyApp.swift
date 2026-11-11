@@ -11,7 +11,7 @@ import SwiftUI
 struct FuzyApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            WatchlistView()
         }
     }
 }

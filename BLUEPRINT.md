@@ -23,24 +23,28 @@ A watchlist app with two kinds of data:
 
 | Kind | Example | Technique |
 |---|---|---|
-| Request/response | 24h stats, price history, symbol list | REST, one `await` |
+| Request/response | Quote (price, day high/low, change), symbol search | REST, one `await` |
 | Live stream | Last trade price ticking | WebSocket, `AsyncStream` |
 
-Screens: **Watchlist** (list + live prices) → **Asset detail** (stats, chart, live price) → **Settings** (debug flags).
+Assets are **US stocks** (AAPL, GOOGL, MSFT, TSLA) served by Finnhub.
+
+Screens: **Watchlist** (list + live prices) → **Asset detail** (quote stats, live price) → **Search** (find and add a symbol) → **Settings** (debug flags).
 
 ## 2. Data sources (free)
 
-Use crypto: it trades 24/7, so the socket always has ticks to test with.
+Use **Finnhub** (https://finnhub.io, docs at https://finnhub.io/docs/api). It has a free key, REST and a free WebSocket.
 
-| Need | Source | Notes |
+| Need | Endpoint | Notes |
 |---|---|---|
-| REST | Binance public API, e.g. `GET https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT` | No key. Check the docs for the exact fields |
-| Live | Binance stream `wss://stream.binance.com:9443/ws/btcusdt@trade` | Messages carry symbol `s`, price `p` (string), time `T`. Combined: `/stream?streams=btcusdt@trade/ethusdt@trade` |
-| Fallback REST | CoinGecko `/api/v3/simple/price` | Rate-limited |
-| Stocks (needs key) | Finnhub REST and `wss://ws.finnhub.io?token=KEY` | Live ticks only during US market hours |
+| Quote | `GET https://finnhub.io/api/v1/quote?symbol=AAPL` | Returns `c` current, `d` change, `dp` percent change, `h` high, `l` low, `o` open, `pc` previous close, `t` time |
+| Symbol search | `GET https://finnhub.io/api/v1/search?q=apple` | `result[]` with `symbol`, `description`, `type` |
+| Live | `wss://ws.finnhub.io?token=KEY`, then send `{"type":"subscribe","symbol":"AAPL"}` | Trade messages: `{"type":"trade","data":[{"s":"AAPL","p":350.1,"t":1699999999999,"v":10}]}` |
 
-Some regions block binance.com. If so, use the fallback or `binance.us` (verify its endpoints in its docs).
-Never commit API keys: put them in a git-ignored `Secrets.xcconfig`.
+Verify field names, plan limits (symbols per socket, calls per minute) and which endpoints are free in the Finnhub docs before coding. Do not trust this table blindly.
+
+**Market hours:** the socket only sends trades while the US market is open, weekdays about 9:30 to 16:00 Eastern (roughly 18:30 to 01:00 in Tbilisi). Outside that window nothing ticks. Show the last REST quote and a "market closed" hint instead of an empty row. For testing after hours, see the optional Binance provider in M5b.
+
+**API key:** never commit it or paste it into chat. Put it in a git-ignored `Secrets.xcconfig` (`FINNHUB_KEY = ...`), expose it through an Info.plist entry (`FinnhubKey = $(FINNHUB_KEY)`), and read it at runtime with `Bundle.main.object(forInfoDictionaryKey:)`. The app passes the key into the networking layer; the packages never read the bundle themselves.
 
 ## 3. Architecture (the Derayah layering)
 
@@ -65,9 +69,9 @@ Tickr/
 ├─ Packages/
 │  ├─ Networking/                   # target "Networking"
 │  │   ├─ Rest/                     # Endpoint.swift, APIClient.swift, URLSessionAPIClient.swift
-│  │   └─ Socket/                   # SocketProvider.swift, SocketService.swift, BinanceProvider.swift
+│  │   └─ Socket/                   # SocketProvider.swift, SocketService.swift, FinnhubProvider.swift
 │  └─ Domain/                       # target "Domain" (depends on Networking)
-│      ├─ Models/                   # Quote, Ticker24h, Candle
+│      ├─ Models/                   # Quote, PriceTick, SearchResult
 │      ├─ Endpoints/                # MarketEndpoint.swift (enum)
 │      ├─ Repositories/             # MarketRepository.swift (protocol + impl)
 │      └─ UseCases/
@@ -112,20 +116,20 @@ public extension Endpoint {
 ```swift
 // Domain/Endpoints/MarketEndpoint.swift  (like Derayah's `authentication` enum)
 public enum MarketEndpoint: Endpoint {
-    case ticker24h(symbol: String)
-    case klines(symbol: String, interval: String)
+    case quote(symbol: String)
+    case search(query: String)
 
-    public var baseURL: URL { URL(string: "https://api.binance.com")! }
+    public var baseURL: URL { URL(string: "https://finnhub.io")! }
     public var path: String {
         switch self {
-        case .ticker24h: "/api/v3/ticker/24hr"
-        case .klines:    "/api/v3/klines"
+        case .quote:  "/api/v1/quote"
+        case .search: "/api/v1/search"
         }
     }
     public var query: [URLQueryItem] {
         switch self {
-        case .ticker24h(let s): [.init(name: "symbol", value: s)]
-        case .klines(let s, let i): [.init(name: "symbol", value: s), .init(name: "interval", value: i)]
+        case .quote(let s):  [.init(name: "symbol", value: s)]
+        case .search(let q): [.init(name: "q", value: q)]
         }
     }
 }
@@ -139,7 +143,11 @@ public protocol APIClient {
 
 public final class URLSessionAPIClient: APIClient {
     private let session: URLSession
-    public init(session: URLSession = .shared) { self.session = session }
+    private let defaultHeaders: [String: String]       // e.g. ["X-Finnhub-Token": key]; check the Finnhub docs for the auth header
+    public init(session: URLSession = .shared, defaultHeaders: [String: String] = [:]) {
+        self.session = session
+        self.defaultHeaders = defaultHeaders
+    }
 
     public func send<T: Decodable>(_ endpoint: some Endpoint) async throws -> T {
         var comps = URLComponents(url: endpoint.baseURL.appendingPathComponent(endpoint.path),
@@ -147,7 +155,8 @@ public final class URLSessionAPIClient: APIClient {
         comps.queryItems = endpoint.query.isEmpty ? nil : endpoint.query
         var request = URLRequest(url: comps.url!)
         request.httpMethod = endpoint.method.rawValue
-        endpoint.headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        defaultHeaders.merging(endpoint.headers) { _, endpointValue in endpointValue }
+            .forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -161,17 +170,19 @@ public final class URLSessionAPIClient: APIClient {
 ```swift
 // Domain/Repositories/MarketRepository.swift
 public protocol MarketRepository {
-    func ticker24h(symbol: String) async throws -> Ticker24h
+    func quote(symbol: String) async throws -> Quote
 }
 public struct LiveMarketRepository: MarketRepository {
     let api: APIClient
-    public func ticker24h(symbol: String) async throws -> Ticker24h {
-        try await api.send(MarketEndpoint.ticker24h(symbol: symbol))   // one line, like UserRepository.getPortfolio
+    public func quote(symbol: String) async throws -> Quote {
+        try await api.send(MarketEndpoint.quote(symbol: symbol))   // one line, like UserRepository.getPortfolio
     }
 }
+// Quote: Decodable with CodingKeys mapping c/d/dp/h/l/o/pc/t to readable names (price, change, changePercent, ...)
 ```
 
-**Done when:** a unit test with a mock `APIClient` returns a decoded `Ticker24h`, and one real call prints a price.
+**Done when:** a unit test with a mock `APIClient` returns a decoded `Quote`, and one real call prints a price.
+Add search (`MarketEndpoint.search`, `SearchResult`) after the quote works.
 
 **Later upgrades (copy Derayah):** a request interceptor that adds an auth header and, on 401, refreshes the token once for
 all waiting requests (see `AuthInterceptor`); log request time and failures; decode the server's error body on non-2xx.
@@ -199,19 +210,25 @@ public protocol SocketProvider: Sendable {
 ```
 
 ```swift
-// Networking/Socket/BinanceProvider.swift  (URLSessionWebSocketTask, no library)
-public actor BinanceProvider: SocketProvider {
+// Networking/Socket/FinnhubProvider.swift  (URLSessionWebSocketTask, no library)
+public actor FinnhubProvider: SocketProvider {
     public nonisolated let events: AsyncStream<SocketEvent>
     private let continuation: AsyncStream<SocketEvent>.Continuation
+    private let apiKey: String                     // injected by the app, never read from the bundle here
     private var task: URLSessionWebSocketTask?
     private var symbols: Set<String> = []          // kept so we can resubscribe after reconnect
 
-    public init() { (events, continuation) = AsyncStream.makeStream() }
+    public init(apiKey: String) {
+        self.apiKey = apiKey
+        (events, continuation) = AsyncStream.makeStream()
+    }
 
     public func connect() async throws {
         guard task == nil else { return }          // already connected or connecting
         continuation.yield(.state(.connecting))
-        let task = URLSession.shared.webSocketTask(with: URL(string: "wss://stream.binance.com:9443/stream")!)
+        var comps = URLComponents(string: "wss://ws.finnhub.io")!
+        comps.queryItems = [.init(name: "token", value: apiKey)]
+        let task = URLSession.shared.webSocketTask(with: comps.url!)
         self.task = task
         task.resume()
         continuation.yield(.state(.connected))
@@ -229,12 +246,13 @@ public actor BinanceProvider: SocketProvider {
 
     public func subscribe(symbols new: [String]) async throws {
         symbols.formUnion(new)
-        let params = new.map { "\($0.lowercased())@trade" }
-        let payload = ["method": "SUBSCRIBE", "params": params, "id": 1] as [String: Any]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try await task?.send(.string(String(decoding: data, as: UTF8.self)))
+        for symbol in new {                        // Finnhub takes one symbol per subscribe message
+            let payload = ["type": "subscribe", "symbol": symbol]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            try await task?.send(.string(String(decoding: data, as: UTF8.self)))
+        }
     }
-    // unsubscribe: same with "UNSUBSCRIBE"; disconnect: task?.cancel(with: .goingAway, reason: nil); task = nil
+    // unsubscribe: same with "type": "unsubscribe"; disconnect: task?.cancel(with: .goingAway, reason: nil); task = nil
 }
 ```
 
@@ -253,7 +271,9 @@ public actor SocketService {
 }
 ```
 
-Parse the message into a domain `PriceTick` (symbol, price, time) in the Domain layer, not in the view.
+Parse the message into domain `PriceTick`s (symbol, price, time) in the Domain layer, not in the view.
+One Finnhub message can hold several trades in its `data` array, and it may also send non-trade messages (for example pings).
+So `PriceTick.decode(_ data: Data) -> [PriceTick]` returns an array, empty for anything that is not a trade.
 
 **Lifecycle rules learned from Derayah (build each one):**
 1. **Connect lazily and coalesce.** Two screens calling connect at once must share one attempt (Derayah keeps an in-flight `Task`).
@@ -261,8 +281,9 @@ Parse the message into a domain `PriceTick` (symbol, price, time) in the Domain 
 3. **Background:** on `scenePhase == .background`, disconnect but keep the subscription set. On `.active`, reconnect with retry/backoff (0s, 2s, 5s).
 4. **Cleanup:** a screen stops listening when it disappears (`.task` cancels automatically).
 5. **Surface connection state** (banner "reconnecting…") instead of silently showing stale prices.
+6. **Market closed is not an error.** A connected socket with no ticks after hours is normal. Show the last quote and a "market closed" hint.
 
-**Done when:** BTC and ETH rows update live; backgrounding and returning restores ticks without a relaunch.
+**Done when:** AAPL and MSFT rows update live while the US market is open; backgrounding and returning restores ticks without a relaunch.
 
 ## 6. Dependency injection (milestone M3)
 
@@ -271,9 +292,11 @@ Use [Factory](https://github.com/hmlongco/Factory) (the SPM package Derayah uses
 ```swift
 // DI/Container+Registrations.swift
 extension Container {
-    var apiClient: Factory<APIClient> { self { URLSessionAPIClient() }.singleton }
+    var apiClient: Factory<APIClient> {
+        self { URLSessionAPIClient(defaultHeaders: ["X-Finnhub-Token": AppConfig.finnhubKey]) }.singleton
+    }
     var marketRepo: Factory<MarketRepository> { self { LiveMarketRepository(api: self.apiClient()) } }
-    var socketService: Factory<SocketService> { self { SocketService(provider: BinanceProvider()) }.singleton }
+    var socketService: Factory<SocketService> { self { SocketService(provider: FinnhubProvider(apiKey: AppConfig.finnhubKey)) }.singleton }
 }
 ```
 
@@ -291,7 +314,6 @@ Model every screen's data state explicitly:
 enum ViewState<Value> {
     case loading
     case loaded(Value)
-    case empty
     case error(String)
 }
 ```
@@ -299,7 +321,7 @@ enum ViewState<Value> {
 ```swift
 @MainActor @Observable
 final class AssetDetailViewModel {
-    private(set) var state: ViewState<Ticker24h> = .loading
+    private(set) var state: ViewState<Quote> = .loading
     private(set) var livePrice: Double?
     @ObservationIgnored @Injected(\.marketRepo) private var repo
     @ObservationIgnored @Injected(\.socketService) private var socket
@@ -308,13 +330,14 @@ final class AssetDetailViewModel {
 
     func load() async {
         state = .loading
-        do { state = .loaded(try await repo.ticker24h(symbol: symbol)) }
+        do { state = .loaded(try await repo.quote(symbol: symbol)) }
         catch { state = .error(error.localizedDescription) }
     }
     func listen() async {                       // run from the view's .task; ends when view disappears
         try? await socket.subscribe([symbol])
         for await event in await socket.events {
-            if case .message(_, let data) = event, let tick = PriceTick(data), tick.symbol == symbol {
+            if case .message(_, let data) = event,
+               let tick = PriceTick.decode(data).last(where: { $0.symbol == symbol }) {
                 livePrice = tick.price
             }
         }
@@ -335,7 +358,6 @@ struct AssetDetailView: View {
         switch viewModel.state {
         case .loading: ProgressView()
         case .loaded(let t): /* stats + live price */
-        case .empty: ContentUnavailableView("No data", systemImage: "chart.line.downtrend.xyaxis")
         case .error(let m): /* message + retry button */
         }
     }
@@ -428,7 +450,7 @@ Also persist the watchlist symbols with `@AppStorage` or `UserDefaults` (use Key
 | Copy from Derayah | Avoid |
 |---|---|
 | Endpoint enum + one-line repository methods | Global singletons (`PortfolioManger.instance`): pass dependencies in instead |
-| Explicit loading/loaded/empty/error states | View models of 1,000+ lines: split by responsibility |
+| Explicit loading/loaded/error states | View models of 1,000+ lines: split by responsibility |
 | Connect-then-subscribe, replay on reconnect | Duplicated alert modifiers per screen: build one shared presenter |
 | Protocols at every boundary, mocks in tests | Callbacks mixed with async/await for the same job: pick `async` |
 | Background disconnect + foreground recovery | Skipping tests for new features |
@@ -455,11 +477,12 @@ Also persist the watchlist symbols with `@AppStorage` or `UserDefaults` (use Key
 | # | Build | Skill | Done when |
 |---|---|---|---|
 | M0 | Project + local package with `Networking`, `Domain` targets, iOS 17 | SPM layering | App builds; App target imports `Domain`, not the reverse |
-| M1 | Watchlist list with hardcoded symbols, `ViewState`, `@Observable` VM | State | Loading/empty/error each reachable |
-| M2 | REST: endpoint enum, client, repository, 24h stats | Networking | Real data shown; mock-based test passes |
+| M1 | Watchlist list with hardcoded symbols, `ViewState`, `@Observable` VM | State | Loading, loaded and error each reachable; Retry works |
+| M2 | REST: endpoint enum, client, repository, quote (price, high, low, change) | Networking | Real data shown; mock-based test passes |
 | M3 | Factory DI + mock repository | DI, testing | Test swaps the mock in; tests run serially |
 | M4 | Detail screen via coordinator + route enum | Navigation | Back swipe works; route logged |
-| M5 | WebSocket: provider, service, live price on rows | Sockets | Ticks update; reconnect after background works |
+| M5 | WebSocket: Finnhub provider, service, live price on rows | Sockets | Ticks update while the market is open; reconnect after background works |
+| M5b | Optional: `BinanceProvider` as a second `SocketProvider` (crypto, 24/7) | Protocol swap | Ticks flow after market hours; screens unchanged |
 | M6 | `AppRootManager`, splash → home, scenePhase handling | App lifecycle | Sockets drop in background and recover |
 | M7 | Feature flag with old/new watchlist | Flags | Toggle flips screen without relaunch |
 | M8 | Sheets (manage list), custom header, persistence | SwiftUI polish | List survives relaunch |
