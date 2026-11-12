@@ -14,6 +14,12 @@
     {
       "kind": "local",
       "path": "Packages",
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/hmlongco/Factory",
+      "version": {
+        "up-to-next-major-version": "3.5.3",
+      },
     },
   ],
   "files": [
@@ -54,6 +60,10 @@
           "build-phase": { "build-phase": "frameworks" },
         }, {
           "product-name": "Networking",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "Factory",
+          "product-name": "FactoryKit",
           "build-phase": { "build-phase": "frameworks" },
         },
       ],

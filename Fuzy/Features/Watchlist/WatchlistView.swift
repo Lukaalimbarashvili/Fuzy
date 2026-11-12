@@ -6,14 +6,10 @@
 //
 
 import SwiftUI
-import Domain
+import FactoryKit
 
 struct WatchlistView: View {
-    @State private var viewModel: WatchlistViewModel
-
-    init(repo: MarketRepository) {
-        _viewModel = State(initialValue: WatchlistViewModel(repo: repo))
-    }
+    @State private var viewModel = WatchlistViewModel()
 
     var body: some View {
         content
@@ -46,4 +42,14 @@ struct WatchlistView: View {
             }
         }
     }
+}
+
+#Preview("Loaded") {
+    let _ = Container.shared.marketRepo.register { MockMarketRepository() }
+    WatchlistView()
+}
+
+#Preview("Error") {
+    let _ = Container.shared.marketRepo.register { FailingMarketRepository() }
+    WatchlistView()
 }

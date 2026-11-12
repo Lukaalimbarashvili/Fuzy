@@ -8,20 +8,16 @@
 import Foundation
 import SwiftUI
 import Domain
-import Networking
+import FactoryKit
 
 @Observable
 final class WatchlistViewModel {
     
     var viewState: ViewState<[WatchItem]> = .loading
-    private let repo: MarketRepository
+    @ObservationIgnored @Injected(\.marketRepo) private var repo
     
     
     let symbols: [String] = ["AAPL", "GOOGL", "IBM"]
-    
-    init(repo: MarketRepository) {
-        self.repo = repo
-    }
     
     func load() async {
         viewState = .loading

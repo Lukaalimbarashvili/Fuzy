@@ -1,7 +1,7 @@
 import Foundation
 
 /// Values injected at build time from `Secrets.xcconfig` (git-ignored) via Info.plist.
-enum Secrets {
+nonisolated enum Secrets {
     static var finnhubKey: String {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "FinnhubAPIKey") as? String,
               !key.isEmpty, !key.hasPrefix("$(") else {
