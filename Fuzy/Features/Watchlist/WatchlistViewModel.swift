@@ -7,27 +7,47 @@
 
 import Foundation
 import SwiftUI
+import Domain
+import Networking
 
 @Observable
 final class WatchlistViewModel {
-
+    
     var viewState: ViewState<[WatchItem]> = .loading
-
+    private let repo: MarketRepository
+    
+    
+    let symbols: [String] = ["AAPL", "GOOGL", "IBM"]
+    
+    init(repo: MarketRepository) {
+        self.repo = repo
+    }
+    
     func load() async {
-
         viewState = .loading
+        var items: [WatchItem] = []
 
-        do {
-            try await Task.sleep(for: .seconds(1))
-            viewState = .loaded([
-                .init(id: "1", instrument: "aapl", desciption: "AAPL Inc", price: 540, change: 41),
-                .init(id: "2", instrument: "GOOGL", desciption: "GOOGL Inc", price: 412, change: 41),
-                .init(id: "3", instrument: "IBM", desciption: "IBM Inc", price: 12, change: 3)
-            ])
-        } catch is CancellationError {
-            return                    
-        } catch {
-            viewState = .error("Check your connection and try again.")
+        await withTaskGroup(of: WatchItem?.self) { group in
+            for symbol in symbols {
+                group.addTask { [repo] in
+                    guard let quote = try? await repo.quote(symbol: symbol) else { return nil }
+                    return WatchItem(symbol: symbol, description: "\(symbol) Inc",
+                                     price: quote.price, changePercent: quote.changePercent)
+                }
+            }
+            for await item in group {
+                if let item {
+                    items.append(item)
+                    items.sort { order(of: $0.symbol) < order(of: $1.symbol) }
+                    viewState = .loaded(items)   // list updates with each arrival
+                }
+            }
         }
+
+        if items.isEmpty { viewState = .error("Check your connection and try again.") }
+    }
+
+    private func order(of symbol: String) -> Int {
+        symbols.firstIndex(of: symbol) ?? .max
     }
 }

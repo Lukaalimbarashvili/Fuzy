@@ -6,9 +6,14 @@
 //
 
 import SwiftUI
+import Domain
 
 struct WatchlistView: View {
-    @State private var viewModel: WatchlistViewModel = WatchlistViewModel()
+    @State private var viewModel: WatchlistViewModel
+
+    init(repo: MarketRepository) {
+        _viewModel = State(initialValue: WatchlistViewModel(repo: repo))
+    }
 
     var body: some View {
         content
@@ -41,8 +46,4 @@ struct WatchlistView: View {
             }
         }
     }
-}
-
-#Preview {
-    WatchlistView()
 }

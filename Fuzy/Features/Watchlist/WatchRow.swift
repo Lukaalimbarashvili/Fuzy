@@ -13,24 +13,34 @@ struct WatchRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            logo(instrument: watchItem.instrument)
+            logo(instrument: watchItem.symbol)
             
             VStack(alignment: .leading) {
-                Text(watchItem.instrument)
-                Text(watchItem.desciption)
+                Text(watchItem.symbol)
+                Text(watchItem.description)
             }
             
             Spacer()
             
             VStack(alignment: .trailing) {
-                Text(String(watchItem.price))
-                Text(String(watchItem.change))
-                    .foregroundStyle(.red)
+                Text(watchItem.price.formatted(.currency(code: "USD")))
+                Text(changeText)
+                    .foregroundStyle(changeColor)
             }
             
         }
     }
     
+    private var changeText: String {
+        guard let value = watchItem.changePercent else { return "—" }
+        return String(format: "%+.2f%%", value)
+    }
+
+    private var changeColor: Color {
+        guard let value = watchItem.changePercent else { return .secondary }
+        return value >= 0 ? .green : .red
+    }
+
     private func logo(instrument: String) -> some View {
         ZStack {
             Circle()

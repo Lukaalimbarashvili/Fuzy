@@ -1,7 +1,7 @@
 # Blueprint: build a mini trading app by hand, the Derayah way
 
 Purpose: a practice project (working name **Tickr**) that copies the *shape* of the Derayah iOS app: layers,
-networking, sockets, navigation, DI, state, flags, tests. You write every line yourself.
+networking, sockets, navigation, DI, state, flags. You write every line yourself.
 
 Source of this plan: reading the Derayah code (see [ONBOARDING.md](ONBOARDING.md) and [CODE_TOUR.md](CODE_TOUR.md)).
 Nothing here was compiled or run, so treat code blocks as sketches to type out and fix, not paste.
@@ -15,7 +15,7 @@ Copy this file into the new project as `BLUEPRINT.md`.
 2. **One milestone at a time.** Each has a "Done when" check. Commit after each.
 3. **Mirror the structure, not the flaws.** Derayah has 1,700-line view models, global singletons and copy-pasted alerts.
    Learn from the layering, avoid those habits (section 11).
-4. iOS 17+, SwiftUI, `async`/`await`, `@Observable`, Swift Testing. No Combine unless you must.
+4. iOS 17+, SwiftUI, `async`/`await`, `@Observable`. No automated tests in this project. No Combine unless you must.
 
 ## 1. What you are building
 
@@ -59,7 +59,7 @@ Networking package         Endpoint, APIClient, SocketService, providers
 Rules (same as Derayah's `.cursor/rules.md`):
 - Views never import networking. Views talk to a view model. View models talk to a use case or repository **protocol**.
 - Dependencies point one way: App → Domain → Networking. A lower layer never imports a higher one.
-- Every external dependency (repository, socket) is a protocol, so tests can swap in a mock.
+- Every external dependency (repository, socket) is a protocol, so implementations (live, mock) can be swapped.
 
 ### Folder layout
 
@@ -85,7 +85,7 @@ Tickr/
 │  │   ├─ AssetDetail/
 │  │   └─ Settings/
 │  └─ Debug/                        # FeatureFlags, debug sheet
-└─ TickrTests/
+└─ (no test target: this project skips automated tests)
 ```
 
 In `Package.swift`, give each target a `path:` and list its dependencies. Folders **inside** a target are only
@@ -181,7 +181,7 @@ public struct LiveMarketRepository: MarketRepository {
 // Quote: Decodable with CodingKeys mapping c/d/dp/h/l/o/pc/t to readable names (price, change, changePercent, ...)
 ```
 
-**Done when:** a unit test with a mock `APIClient` returns a decoded `Quote`, and one real call prints a price.
+**Done when:** one real call returns a decoded `Quote` and a price shows on screen.
 Add search (`MarketEndpoint.search`, `SearchResult`) after the quote works.
 
 **Later upgrades (copy Derayah):** a request interceptor that adds an auth header and, on 401, refreshes the token once for
@@ -301,10 +301,10 @@ extension Container {
 ```
 
 In a view model: `@ObservationIgnored @Injected(\.marketRepo) private var repo`.
-In tests: `Container.shared.marketRepo.register { MockMarketRepository() }`.
+For previews: `Container.shared.marketRepo.register { MockMarketRepository() }`.
 
-**Gotcha:** `Container.shared` is global. Tests that swap mocks must run **serially**, and each should reset
-(`Container.shared.reset()`) in setup, or they leak into each other (Derayah's test schemes are serial for this reason).
+**Gotcha:** `Container.shared` is global. A mock registered for one preview or debug run leaks into others unless you
+reset it (`Container.shared.reset()`).
 
 ## 7. State and view models (milestone M1/M2)
 
@@ -453,7 +453,7 @@ Also persist the watchlist symbols with `@AppStorage` or `UserDefaults` (use Key
 | Explicit loading/loaded/error states | View models of 1,000+ lines: split by responsibility |
 | Connect-then-subscribe, replay on reconnect | Duplicated alert modifiers per screen: build one shared presenter |
 | Protocols at every boundary, mocks in tests | Callbacks mixed with async/await for the same job: pick `async` |
-| Background disconnect + foreground recovery | Skipping tests for new features |
+| Background disconnect + foreground recovery | (tests are out of scope here) |
 | Coordinators for pushes | Business logic inside views |
 
 ## 12. Where each piece lives in the real project
@@ -478,15 +478,15 @@ Also persist the watchlist symbols with `@AppStorage` or `UserDefaults` (use Key
 |---|---|---|---|
 | M0 | Project + local package with `Networking`, `Domain` targets, iOS 17 | SPM layering | App builds; App target imports `Domain`, not the reverse |
 | M1 | Watchlist list with hardcoded symbols, `ViewState`, `@Observable` VM | State | Loading, loaded and error each reachable; Retry works |
-| M2 | REST: endpoint enum, client, repository, quote (price, high, low, change) | Networking | Real data shown; mock-based test passes |
-| M3 | Factory DI + mock repository | DI, testing | Test swaps the mock in; tests run serially |
+| M2 | REST: endpoint enum, client, repository, quote (price, high, low, change) | Networking | Real data shown on rows |
+| M3 | Factory DI + mock repository | DI | Previews use the mock; app uses the live repo |
 | M4 | Detail screen via coordinator + route enum | Navigation | Back swipe works; route logged |
 | M5 | WebSocket: Finnhub provider, service, live price on rows | Sockets | Ticks update while the market is open; reconnect after background works |
 | M5b | Optional: `BinanceProvider` as a second `SocketProvider` (crypto, 24/7) | Protocol swap | Ticks flow after market hours; screens unchanged |
 | M6 | `AppRootManager`, splash → home, scenePhase handling | App lifecycle | Sockets drop in background and recover |
 | M7 | Feature flag with old/new watchlist | Flags | Toggle flips screen without relaunch |
 | M8 | Sheets (manage list), custom header, persistence | SwiftUI polish | List survives relaunch |
-| M9 | Tests, lint (SwiftLint), README | Quality | `swift test` green |
+| M9 | Lint (SwiftLint), README | Quality | Lint clean; README written |
 
 ## 14. Using this file with Claude in the new project
 
@@ -495,7 +495,7 @@ Put this in the new project's `CLAUDE.md` so Claude coaches instead of writing t
 ```
 I am learning by building this project by hand, following BLUEPRINT.md.
 Act as a mentor. Do NOT write feature code unless I ask for it.
-When I finish a milestone, review my code against BLUEPRINT.md: layering, state handling, naming, tests.
+When I finish a milestone, review my code against BLUEPRINT.md: layering, state handling, naming.
 Point to the exact line and explain why, then let me fix it.
 If I'm stuck, give a hint first, then a small snippet only if I ask again.
 ```

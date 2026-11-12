@@ -19,6 +19,8 @@
   "files": [
     { "kind": "folder", "path": "Fuzy", "target-membership": [ "Fuzy" ] },
     { "path": "Packages" },
+    { "path": "Secrets.xcconfig.example" },
+    { "path": "Secrets.xcconfig" },
     {
       "kind": "group",
       "name": "Products",
@@ -33,6 +35,9 @@
       "id": "29265C2130A31E310090CFF1",
       "product": "Products/Fuzy.app",
       "product-type": "application",
+      "specialized-configurations": [
+        { "name": "Debug", "file": "Secrets.xcconfig" },
+      ],
       "build-phases": [
         "compile-sources",
         "frameworks",
@@ -59,6 +64,7 @@
         "CURRENT_PROJECT_VERSION": "1",
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "YES",
+        "INFOPLIST_FILE": "Config/Info.plist",
         "INFOPLIST_KEY_UIApplicationSceneManifest_Generation": "YES",
         "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents": "YES",
         "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",

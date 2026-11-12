@@ -6,12 +6,18 @@
 //
 
 import SwiftUI
+import Domain
+import Networking
 
 @main
 struct FuzyApp: App {
+    private let repo: MarketRepository = LiveMarketRepository(
+        api: URLSessionAPIClient(defaultHeaders: ["X-Finnhub-Token": Secrets.finnhubKey])
+    )
+
     var body: some Scene {
         WindowGroup {
-            WatchlistView()
+            WatchlistView(repo: repo)
         }
     }
 }
