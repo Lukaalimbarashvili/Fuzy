@@ -10,6 +10,11 @@ import FactoryKit
 
 struct WatchlistView: View {
     @State private var viewModel = WatchlistViewModel()
+    let onSelect: (String) -> Void
+
+    init(onSelect: @escaping (String) -> Void) {
+        self.onSelect = onSelect
+    }
 
     var body: some View {
         content
@@ -38,7 +43,12 @@ struct WatchlistView: View {
     private func watchList(items: [WatchItem]) -> some View {
         List {
             ForEach(items) { item in
-                WatchRow(watchItem: item)
+                Button {
+                    onSelect(item.symbol)
+                } label: {
+                    WatchRow(watchItem: item)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -46,10 +56,10 @@ struct WatchlistView: View {
 
 #Preview("Loaded") {
     let _ = Container.shared.marketRepo.register { MockMarketRepository() }
-    WatchlistView()
+    WatchlistView(onSelect: { _ in })
 }
 
 #Preview("Error") {
     let _ = Container.shared.marketRepo.register { FailingMarketRepository() }
-    WatchlistView()
+    WatchlistView(onSelect: { _ in })
 }
